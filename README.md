@@ -8,11 +8,12 @@ A universal video-downloader skill: yt-dlp for the 1800+ sites it supports; for 
 
 ```
 网址
-├─ 直接是 .m3u8 地址 ─────────────────────→ N_m3u8DL-RE
-├─ 直链媒体文件 / yt-dlp 有专用解析器 ──────→ yt-dlp ──失败──┐
-└─ 其它网页 ────────────────────────────→ 浏览器嗅探 m3u8 ←┘
-                                            ├─ 抓到 → N_m3u8DL-RE
-                                            └─ 没抓到 → yt-dlp 通用解析再试一次
+├─ 直接是 .m3u8 地址 ──────────→ N_m3u8DL-RE
+├─ 直链媒体文件（.mp4 等）─────→ yt-dlp
+├─ yt-dlp 有专用解析器 ────────→ yt-dlp ──失败──→ 浏览器嗅探 m3u8 → N_m3u8DL-RE
+└─ 其它网页 ──────────────────→ 浏览器嗅探 m3u8
+                                 ├─ 抓到 → N_m3u8DL-RE
+                                 └─ 没抓到 → yt-dlp 通用解析再试一次
 ```
 
 - **yt-dlp 支持的网站**（YouTube、B 站、抖音、Twitter/X 等）：直接用 yt-dlp。

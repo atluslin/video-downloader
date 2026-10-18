@@ -12,7 +12,7 @@ description: 通用视频下载器：给一个视频网址就能下载成 mp4。
 python "<本skill目录>/scripts/install_deps.py"
 ```
 它会做这些事：安装或升级 yt-dlp；把 N_m3u8DL-RE 和 deno 下载到 `bin/`（deno 是 yt-dlp 解析 YouTube 必需的 JS 运行时）；安装 Playwright 和 Chromium；检查 ffmpeg。
-每一项都是独立安装的，某一项失败（比如当前平台没有对应的 deno 版本）不会影响其它项，最后会汇总哪几项没装好。
+每一项都是独立安装的，某一项失败（比如当前平台没有对应的 deno 版本）不会影响其它项。没装好的项会以 `[x]` 开头逐条列出（缺 ffmpeg 时以 `[!]` 开头提示），最后再报告共有几项未就绪。
 如果 vdl.py 提示找不到某个工具，就先运行它。某个网站用 yt-dlp 突然下载失败（通常是网站改版），也再运行一次，把 yt-dlp 升级到最新。
 如果提示 “externally-managed”（Debian/Ubuntu/Homebrew 的系统 Python 不允许直接用 pip 装包），先建一个虚拟环境：`python -m venv .venv`，之后用 `.venv` 里的 python 运行这两个脚本。
 
@@ -20,12 +20,13 @@ python "<本skill目录>/scripts/install_deps.py"
 
 ```
 网址
-├─ 直接是 .m3u8 地址 ─────────────────────→ N_m3u8DL-RE
-├─ yt-dlp 有这个网站的专用解析器 ───────────→ yt-dlp ──失败──┐
-│   (YouTube、BiliBili、Douyin、Twitter …)                    │
-└─ 只能用 yt-dlp 的通用解析器 (Generic) ──→ 浏览器嗅探 m3u8 ←┘
-                                              ├─ 抓到 → N_m3u8DL-RE
-                                              └─ 没抓到 → yt-dlp 通用解析再试一次（内嵌视频、直链 mp4 等）
+├─ 路径以 .m3u8 结尾 ──────────────────→ N_m3u8DL-RE
+├─ 直链媒体文件（.mp4/.flv/.mpd 等）───→ yt-dlp（失败即结束）
+├─ yt-dlp 有这个网站的专用解析器 ───────→ yt-dlp ──失败──→ 浏览器嗅探 m3u8 → N_m3u8DL-RE
+│   (YouTube、BiliBili、Douyin、Twitter …)
+└─ 只能用 yt-dlp 的通用解析器 (Generic) → 浏览器嗅探 m3u8
+                                          ├─ 抓到 → N_m3u8DL-RE
+                                          └─ 没抓到 → yt-dlp 通用解析再试一次（内嵌视频、直链 mp4 等）
 ```
 
 判断网址属于哪种情况只要不到 1 秒，不需要联网。

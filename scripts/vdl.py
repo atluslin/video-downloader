@@ -68,6 +68,9 @@ def detect_proxy():
 
 def parse_proxy_server(server):
     """Windows ProxyServer value: "host:port", or per-protocol "http=host:port;https=host:port;socks=host:port"."""
+    server = (server or "").strip().strip(";")
+    if not server:  # ProxyEnable=1 with an empty server: no usable proxy
+        return None
     if "=" not in server:
         return with_scheme(server)
     parts = dict(p.split("=", 1) for p in server.split(";") if "=" in p)
@@ -118,6 +121,8 @@ def normalize_url(url):
     """Accept "www.site.com/..." without a scheme (Playwright refuses it); keep local file paths."""
     if re.match(r"[a-zA-Z][\w+.-]*://", url):  # not just "://" anywhere, e.g. inside ?u=https://...
         return url
+    if url.startswith("//"):  # protocol-relative, as copied from page source
+        return "https:" + url
     try:
         if Path(url).exists():
             return url
@@ -130,14 +135,16 @@ WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(10)),
 
 
 def safe_name(s):
-    s = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", s or "")
-    # leading "-" would be parsed as an option by the downloaders
-    s = re.sub(r"\s+", " ", s).strip(" .").lstrip("-").strip()
+    s = re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f]+', " ", s or "")  # incl. control chars (RE would rename them)
+    # leading "-" would be parsed as an option by the downloaders; leading "." hides the file on Unix
+    s = re.sub(r"\s+", " ", s).strip(" .").lstrip("- .").strip()
     # Cap by UTF-8 bytes, not chars: 120 CJK chars = 360 bytes > the 255-byte filename limit on Linux/macOS.
     # 180 leaves room for suffixes the downloaders add (".MUX.mp4", "_2", ".log").
     s = s.encode("utf-8")[:180].decode("utf-8", "ignore").rstrip(" .")
-    # "CON.mp4" / "nul.txt.mp4" can't be created on Windows: the part before the first dot counts
-    return s + "_" if s.split(".")[0].strip().upper() in WINDOWS_RESERVED else s
+    # "CON.mp4" / "Con.Air.mp4" can't be created on Windows 10: the part before the first dot counts,
+    # so the "_" has to go right after the reserved word
+    head, dot, rest = s.partition(".")
+    return head + "_" + dot + rest if head.strip().upper() in WINDOWS_RESERVED else s
 
 
 def python_cmd():
@@ -164,7 +171,11 @@ def outputs(out, name):
 
 def playlist_outputs(out, name):
     """Files of an earlier --playlist -n NAME run: NAME_1.mp4, NAME_01.mp4, ..."""
-    return [p for p in out.glob(glob.escape(name) + "_*")
+    # iterdir + re.I, not glob: glob is case-sensitive on POSIX, but macOS/Windows file systems aren't,
+    # so an earlier "show_1.mp4" would be missed for NAME "Show" and then reused by yt-dlp
+    if not out.is_dir():
+        return []
+    return [p for p in out.iterdir()
             if p.suffix.lower() in MEDIA_EXTS and re.fullmatch(re.escape(name) + r"_\d+", p.stem, re.I)]
 
 
@@ -204,10 +215,11 @@ def ytdlp_download(url, name, out, ctx):
     out.mkdir(parents=True, exist_ok=True)
     fd, paths_file = tempfile.mkstemp(suffix=".txt")
     os.close(fd)
-    # Several entries: "_<n>" each so -n NAME doesn't reuse one filename. Without -n, the video id
-    # keeps two videos whose titles share the first bytes from colliding (yt-dlp would skip the second
-    # as "already downloaded").
-    index = "%(playlist_index&_{}|)s" if multi else ""
+    # Several entries: "_<n>" each so -n NAME doesn't reuse one filename. autonumber, not playlist_index:
+    # a channel root is several nested playlists (Videos/Shorts/Live) whose indexes each restart at 1.
+    # Without -n, the video id keeps two videos whose titles share the first bytes from colliding
+    # (yt-dlp would skip the second as "already downloaded").
+    index = "%(autonumber&_{}|)s" if multi else ""
     cmd = [*python_cmd(), "-m", "yt_dlp", url, "-P", str(out),
            "-o", (name.replace("%", "%%") + index + ".%(ext)s") if name else "%(title).100B [%(id)s].%(ext)s",
            "--merge-output-format", "mp4", "--ffmpeg-location", ctx["ffmpeg"],
@@ -331,7 +343,13 @@ def sniff(url, proxy, headful, wait):
 
     def on_response(r):
         u, ct = r.url, r.headers.get("content-type", "").lower()
-        if ".m3u8" in u.lower() or "mpegurl" in ct:
+        if 300 <= r.status < 400:  # the redirect hop itself has no body; its target fires its own event
+            return
+        chain, req = [u], r.request.redirected_from  # .../play.m3u8 → 302 → https://cdn/abc?auth=…
+        while req:
+            chain.append(req.url)
+            req = req.redirected_from
+        if any(".m3u8" in c.lower() for c in chain) or "mpegurl" in ct:
             responses.append(r)
             state["last"] = time.time()
         elif ct.startswith("video/") or re.search(r"\.(mp4|flv|mpd)(\?|$)", u.lower()):
@@ -580,13 +598,13 @@ def process(url, name, ctx):
             report(f, 0 if f.suffix.lower() in SUB_EXTS else expected, ctx)
         return bool(f)
 
-    if ".m3u8" in urlparse(url).path.lower():
+    if urlparse(url).path.lower().endswith(".m3u8"):  # not /play/x.m3u8.html
         headers = {"referer": a.referer} if a.referer else {}
         if a.sniff_only:  # nothing to sniff
             print(json.dumps({"url": url, "headers": headers}, ensure_ascii=False, indent=1))
             return True
         if a.engine != "ytdlp":
-            return via_m3u8(url, headers, 0, Path(urlparse(url).path).stem)
+            return via_m3u8(url, headers, 0, unquote(Path(urlparse(url).path).stem))
 
     ie = ytdlp_extractor(url) if a.engine != "sniff" else None
     # A direct media file / DASH manifest: the browser would only "download" it and sniff nothing.
@@ -651,7 +669,8 @@ def main():
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8", errors="replace")
     a = ap.parse_args()
-    proxy = detect_proxy() if a.proxy == "auto" else (None if a.proxy == "none" else with_scheme(a.proxy))
+    mode = a.proxy.strip().lower()
+    proxy = detect_proxy() if mode == "auto" else (None if mode in ("none", "") else with_scheme(a.proxy.strip()))
     print(f"[*] 代理: {proxy or '无'}")
     ffmpeg = find_tool(a.ffmpeg, "FFMPEG", "ffmpeg")
     if not ffmpeg and not a.sniff_only:
