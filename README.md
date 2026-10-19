@@ -38,7 +38,16 @@ python ~/.claude/skills/video-downloader/scripts/install_deps.py
 
 ## 用法
 
-在 AI 工具里直接说“下载这个视频 <网址>”就行。也可以自己运行：
+在 AI 工具里直接说“下载这个视频 <网址>”就行。
+
+自己用的话，最简单的是交互式脚本：运行后粘贴网址，或者 B 站、抖音的分享文字（会自动提取里面的网址），回车开始下载，输入 `q` 退出：
+
+```bash
+python download_video.py            # 保存到当前目录下的 downloads/
+python download_video.py D:\Videos  # 指定保存目录
+```
+
+也可以直接调用命令行工具：
 
 ```bash
 python scripts/vdl.py "https://example.com/play/123"                 # 单个视频
